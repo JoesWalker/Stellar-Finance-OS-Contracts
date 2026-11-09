@@ -250,6 +250,7 @@ stateDiagram-v2
     Open --> Open: pay (partial)
     Open --> Paid: pay (paid == amount)
     Open --> Void: void (only if nothing paid)
+    Open --> Closed: close (only if partially paid)
     Paid --> [*]
     Open --> Closed: close (only if paid > 0)
     Void --> [*]
@@ -263,6 +264,7 @@ stateDiagram-v2
 | `register(business, id, token, amount, content_hash)` | `business` | Creates an Open invoice. `token` must be a real token contract |
 | `pay(payer, business, id, amount)` | `payer` | Sends `amount` from payer to `business` for its invoice `id`. Partial payments are fine. **Overpaying is rejected** |
 | `void(business, id)` | the invoice's own business | Voids an Open invoice that has received nothing |
+| `close(business, id)` | the invoice's own business | Closes an Open invoice that is partially paid (`paid > 0`). Terminal; later payments fail with `NotOpen` |
 | `close(business, id)` | the invoice's own business | Closes a partially paid Open invoice (terminal). Zero-paid invoices use `void` |
 | `get(id)` | anyone | Returns the invoice |
 | `get(business, id)` | anyone | Returns the invoice |
@@ -297,6 +299,7 @@ The backend uses `paid` as its `contract_event` payment-match method. Only trust
 | 7 | `ArithmeticOverflow` | `paid + amount` overflowed `i128` |
 | 8 | `InvalidToken` | `token` doesn't implement the token interface |
 | 9 | `NotBusiness` | Caller isn't the invoice's business |
+| 10 | `NothingPaid` | Can't close: nothing paid yet (use `void`) |
 | 10 | `NothingPaid` | Can't close: no payments received (use `void`) |
 | 9 | `NotBusiness` | Reserved, no longer returned (another business's invoice is `InvoiceNotFound`) |
 

@@ -667,6 +667,7 @@ fn close_rejects_wrong_signer() {
     s.pay(&payer, &id, 200);
     let attacker = Address::generate(&s.env);
     assert_eq!(s.try_close(&attacker, &s.business, &id), Err(None));
+    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -695,6 +696,12 @@ fn close_rejects_unknown_invoice() {
 fn close_rejects_paid_void_and_closed() {
     let s = Setup::new();
     let payer = s.payer(1_000);
+    let paid = s.register(1, 500);
+    s.pay(&payer, &paid, 500);
+    let voided = s.register(2, 500);
+    s.try_void(&s.business, &s.business, &voided).unwrap();
+    let closed = s.register(3, 500);
+    s.pay(&payer, &closed, 1);
     let paid = s.register(1, 100);
     s.pay(&payer, &paid, 100);
     let voided = s.register(2, 100);
@@ -718,6 +725,7 @@ fn close_rejects_nothing_paid() {
         s.try_close(&s.business, &s.business, &id),
         Err(Some(Error::NothingPaid))
     );
+    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -725,6 +733,7 @@ fn close_extends_invoice_ttl() {
     let s = Setup::new();
     let id = s.register(1, 500);
     let payer = s.payer(1_000);
+    s.pay(&payer, &id, 100);
     s.pay(&payer, &id, 200);
     let step = 2 * finance_os_common::ttl::DAY_IN_LEDGERS;
     s.env.ledger().with_mut(|l| l.sequence_number += step);
@@ -1107,6 +1116,7 @@ fn event_topic_xdr_matches_docs() {
             events::Closed {
                 id: id.clone(),
                 paid: 1,
+                outstanding: 1
                 outstanding: 0
             }
             .to_xdr(&env, &contract),

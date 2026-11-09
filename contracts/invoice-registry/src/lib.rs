@@ -174,6 +174,38 @@ impl InvoiceRegistry {
         Ok(())
     }
 
+    /// Close a partially paid Open invoice (discount, dispute, write-off or
+    /// remainder settled off-chain). Only the invoice's business may close it.
+    /// Invoices with nothing paid must use `void` instead.
+    pub fn close(env: Env, business: Address, id: BytesN<32>) -> Result<(), Error> {
+        business.require_auth();
+        storage::bump_instance(&env);
+        let mut invoice = storage::get_invoice(&env, &id).ok_or(Error::InvoiceNotFound)?;
+        if invoice.business != business {
+            return Err(Error::NotBusiness);
+        }
+        if invoice.status != InvoiceStatus::Open {
+            return Err(Error::NotOpen);
+        }
+        if invoice.paid == 0 {
+            return Err(Error::NothingPaid);
+        }
+        let outstanding = invoice
+            .amount
+            .checked_sub(invoice.paid)
+            .ok_or(Error::ArithmeticOverflow)?;
+        invoice.status = InvoiceStatus::Closed;
+        storage::set_invoice(&env, &invoice);
+
+        Closed {
+            id,
+            paid: invoice.paid,
+            outstanding,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
     pub fn get(env: Env, id: BytesN<32>) -> Result<Invoice, Error> {
     pub fn get(env: Env, business: Address, id: BytesN<32>) -> Result<Invoice, Error> {
         storage::bump_instance(&env);

@@ -97,6 +97,7 @@ contract), so this table can't silently drift from the code.
 - `registered`: create the record (Open).
 - `paid`: set `paid = total_paid`. Mark Paid when `total_paid` equals the registered `amount`.
 - `voided`: mark Void.
+- `closed`: mark Closed (terminal). `paid` is final and `outstanding == amount - paid`; no further `paid` events will occur.
 - `closed`: mark Closed (terminal). `outstanding` equals `amount - paid`.
 - `paid`: look up `(business, id)` and set `paid = total_paid`. Mark Paid when `total_paid` equals the registered `amount`.
 - `voided`: look up `(business, id)` and mark Void.

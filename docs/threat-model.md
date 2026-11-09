@@ -56,6 +56,8 @@ Status: **pre-audit, testnet only.** Not upgradeable (no `update_current_contrac
 | R8 | Fake token registered so the "paid" events are worthless | `register` checks `decimals()`, but a malicious token contract still passes. **The indexer must only trust `paid` events for allow-listed token addresses** | `register_rejects_unknown_token`, `register_rejects_non_token_contract` |
 | R9 | i128 overflow on `paid` | `checked_add` → `ArithmeticOverflow` | `pay_rejects_overflowing_total` |
 | R10 | PII on-chain | Only hashes and amounts are stored (`id`, `content_hash`) | Design / backend responsibility |
+| R12 | Partially paid invoice stays payable forever | `close` makes it terminal; `pay` then fails `NotOpen` | `close_blocks_payment`, `no_payment_accepted_after_close` |
+| R11 | Reusing a voided id makes events ambiguous | Ids are never freed; `InvoiceExists` even after `void` | `void_does_not_free_the_id_for_reuse` |
 | R11 | Reusing a voided id makes events ambiguous | Ids are never freed per business; `InvoiceExists` even after `void` | `void_does_not_free_the_id_for_reuse` |
 
 ## Residual risks and open items

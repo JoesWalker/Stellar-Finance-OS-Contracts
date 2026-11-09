@@ -22,6 +22,7 @@ event shape or error code is a **major** bump.
     need regenerating (`./scripts/bindings.sh`).
 
 ### Added
+- `invoice-registry`: `close(business, id)`, `InvoiceStatus::Closed`, event `closed { paid, outstanding }`, error 10 `NothingPaid`. Lets a business finalise a partially paid invoice.
 - `invoice-registry`: `close` entrypoint, `InvoiceStatus::Closed`, `closed`
   event and error 10 `NothingPaid`, so a partially paid invoice can reach a
   terminal state.

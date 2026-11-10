@@ -19,6 +19,8 @@ finance-os-common = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 proptest = { workspace = true }
+# Cross-contract test: invoice paid straight into an approval vault.
+approval-vault = { path = "../approval-vault" }
 
 [lints]
 workspace = true

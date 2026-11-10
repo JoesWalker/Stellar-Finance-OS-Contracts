@@ -700,11 +700,13 @@ fn close_cannot_reach_other_business_invoice() {
     let id = s.register(1, 500);
     let payer = s.payer(1_000);
     s.pay(&payer, &id, 200);
+    // Another business can only reach its own `(business, id)` key.
     let other = Address::generate(&s.env);
     assert_eq!(
         s.try_close(&other, &other, &id),
         Err(Some(Error::InvoiceNotFound))
     );
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -1294,6 +1296,7 @@ fn event_topic_xdr_matches_docs() {
                 id: id.clone(),
                 business: a.clone(),
                 paid: 1,
+                outstanding: 0
                 outstanding: 1
             }
             .to_xdr(&env, &contract),

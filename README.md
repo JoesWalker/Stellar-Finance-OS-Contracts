@@ -251,7 +251,6 @@ stateDiagram-v2
     Open --> Paid: pay (paid == amount)
     Open --> Void: void (only if nothing paid)
     Paid --> [*]
-    Open --> Closed: close (only if paid > 0)
     Void --> [*]
     Closed --> [*]
 ```
@@ -263,6 +262,7 @@ stateDiagram-v2
 | `register(business, id, token, amount, content_hash, payee)` | `business` | Creates an Open invoice paid out to `payee`. `payee` may equal `business` or be any address/contract (e.g. the vault id from `deployments/<network>.json`), but not the registry. `token` must be a real token contract |
 | `pay(payer, business, id, amount)` | `payer` | Sends `amount` from payer to the invoice's `payee` for `business`'s invoice `id`. Partial payments are fine. **Overpaying is rejected** |
 | `void(business, id)` | the invoice's own business | Voids an Open invoice that has received nothing |
+| `close(business, id)` | the invoice's own business | Closes an Open invoice that is partially paid (`paid > 0`). Terminal; later payments fail with `NotOpen`. Zero-paid invoices use `void` |
 | `close(business, id)` | the invoice's own business | Closes an Open invoice that is partially paid (`paid > 0`). Terminal; later payments fail with `NotOpen` |
 | `get(business, id)` | anyone | Returns the invoice |
 
@@ -274,6 +274,8 @@ Topics: `[<event name>, id]`. Data: a map of the fields below. Key invoices by `
 
 | Event | Data | Emitted by |
 |---|---|---|
+| `registered` | `business`, `token`, `amount` | `register` |
+| `paid` | `business`, `payer`, `amount`, `total_paid` | `pay` |
 | `registered` | `business`, `token`, `amount`, `payee` | `register` |
 | `paid` | `business`, `payer`, `amount`, `total_paid` (funds went to the registered `payee`) | `pay` |
 | `voided` | `business` | `void` |
@@ -294,6 +296,7 @@ The backend uses `paid` as its `contract_event` payment-match method. Only trust
 | 7 | `ArithmeticOverflow` | `paid + amount` overflowed `i128` |
 | 8 | `InvalidToken` | `token` doesn't implement the token interface |
 | 9 | `NotBusiness` | Reserved, no longer returned (another business's invoice is `InvoiceNotFound`) |
+| 10 | `NothingPaid` | Can't close: nothing paid yet (use `void`) |
 | 10 | `NothingPaid` | Can't close: no payments received (use `void`) |
 | 11 | `InvalidPayee` | `payee` is the registry itself (the registry never holds funds) |
 

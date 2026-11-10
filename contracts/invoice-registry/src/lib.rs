@@ -56,7 +56,7 @@ impl InvoiceRegistry {
                 amount,
                 paid: 0,
                 status: InvoiceStatus::Open,
-                content_hash,
+                content_hash: content_hash.clone(),
             },
         );
         Registered {
@@ -64,6 +64,7 @@ impl InvoiceRegistry {
             business,
             token,
             amount,
+            content_hash,
         }
         .publish(&env);
         Ok(())

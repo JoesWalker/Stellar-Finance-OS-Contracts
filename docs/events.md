@@ -74,12 +74,10 @@ contract), so this table can't silently drift from the code.
 
 | Event | Fields (ScVal type) |
 |---|---|
-| `registered` | `amount` (I128), `business` (Address), `token` (Address) |
-| `paid` | `amount` (I128), `payer` (Address), `total_paid` (I128) |
-| `voided` | (none) |
-| `closed` | `outstanding` (I128), `paid` (I128) |
+| `registered` | `amount` (I128), `business` (Address), `payee` (Address), `token` (Address) |
 | `paid` | `amount` (I128), `business` (Address), `payer` (Address), `total_paid` (I128) |
 | `voided` | `business` (Address) |
+| `closed` | `business` (Address), `outstanding` (I128), `paid` (I128) |
 
 ## Mirroring rules
 
@@ -94,13 +92,10 @@ contract), so this table can't silently drift from the code.
 **Invoices**
 
 - An invoice is identified by `(business, id)`; the same `id` can exist under several businesses. Key your records on both.
-- `registered`: create the record (Open).
-- `paid`: set `paid = total_paid`. Mark Paid when `total_paid` equals the registered `amount`.
-- `voided`: mark Void.
-- `closed`: mark Closed (terminal). `paid` is final and `outstanding == amount - paid`; no further `paid` events will occur.
-- `closed`: mark Closed (terminal). `outstanding` equals `amount - paid`.
-- `paid`: look up `(business, id)` and set `paid = total_paid`. Mark Paid when `total_paid` equals the registered `amount`.
+- `registered`: create the record (Open) and store its `payee`: every payment for this invoice lands there (may differ from `business`, e.g. an approval vault).
+- `paid`: look up `(business, id)` and set `paid = total_paid`. Mark Paid when `total_paid` equals the registered `amount`. The funds went to the stored `payee`.
 - `voided`: look up `(business, id)` and mark Void.
+- `closed`: look up `(business, id)` and mark Closed (terminal). `paid` is final and `outstanding == amount - paid`; no further `paid` events will occur.
 
 **Trust**
 

@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "M-of-N approval vault for Stellar Finance OS treasury funds"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]

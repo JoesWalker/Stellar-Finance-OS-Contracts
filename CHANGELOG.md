@@ -21,8 +21,17 @@ event shape or error code is a **major** bump.
   - The indexer must key invoices on `(business, id)`. Generated bindings
     need regenerating (`./scripts/bindings.sh`).
 
+- `invoice-registry`: invoices have a `payee` (issue #4), so revenue can be
+  paid straight into an `approval-vault`.
+  - `register(business, id, token, amount, content_hash)` →
+    `register(business, id, token, amount, content_hash, payee)`.
+  - `Invoice` gains `payee`; `pay` transfers payer → `payee`. `business` keeps
+    sole control of `void` and `close`.
+  - `registered` event gains a `payee` data field; `closed` gains `business`
+    (topics unchanged).
+  - New error 11 `InvalidPayee`: `payee` is the registry itself.
+
 ### Added
-- `invoice-registry`: `close(business, id)`, `InvoiceStatus::Closed`, event `closed { paid, outstanding }`, error 10 `NothingPaid`. Lets a business finalise a partially paid invoice.
 - `invoice-registry`: `close` entrypoint, `InvoiceStatus::Closed`, `closed`
   event and error 10 `NothingPaid`, so a partially paid invoice can reach a
   terminal state.

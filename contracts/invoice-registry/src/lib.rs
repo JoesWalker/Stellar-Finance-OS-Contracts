@@ -24,7 +24,10 @@ pub struct InvoiceRegistry;
 
 #[contractimpl]
 impl InvoiceRegistry {
-    /// Register an Open invoice payable to `business` in `token`.
+    /// Register an Open invoice controlled by `business` and payable to
+    /// `payee` in `token`. `payee` may equal `business` (the common case) or
+    /// be any other address or contract, e.g. an approval vault. It may not be
+    /// the registry itself: the registry never holds funds.
     ///
     /// `id` and `content_hash` are backend-generated hashes. `token` must be a
     /// contract implementing the standard token interface. This is checked
@@ -36,11 +39,15 @@ impl InvoiceRegistry {
         token: Address,
         amount: i128,
         content_hash: BytesN<32>,
+        payee: Address,
     ) -> Result<(), Error> {
         business.require_auth();
         storage::bump_instance(&env);
         if !amount::is_positive(amount) {
             return Err(Error::InvalidAmount);
+        }
+        if payee == env.current_contract_address() {
+            return Err(Error::InvalidPayee);
         }
         if storage::has_invoice(&env, &business, &id) {
             return Err(Error::InvoiceExists);
@@ -57,6 +64,7 @@ impl InvoiceRegistry {
                 paid: 0,
                 status: InvoiceStatus::Open,
                 content_hash,
+                payee: payee.clone(),
             },
         );
         Registered {
@@ -64,13 +72,14 @@ impl InvoiceRegistry {
             business,
             token,
             amount,
+            payee,
         }
         .publish(&env);
         Ok(())
     }
 
     /// Pay `amount` towards `business`'s Open invoice `id`. Tokens move
-    /// straight from `payer` to `business`. The invoice is looked up by
+    /// straight from `payer` to the invoice's `payee`. The invoice is looked up by
     /// `(business, id)`, so an invoice another address registered under the
     /// same `id` can never receive this payment. Partial payments are
     /// allowed. The invoice becomes Paid once `paid == amount`.
@@ -109,7 +118,7 @@ impl InvoiceRegistry {
         }
         storage::set_invoice(&env, &invoice);
 
-        token::TokenClient::new(&env, &invoice.token).transfer(&payer, &business, &amount);
+        token::TokenClient::new(&env, &invoice.token).transfer(&payer, &invoice.payee, &amount);
 
         Paid {
             id,
@@ -123,7 +132,8 @@ impl InvoiceRegistry {
     }
 
     /// Void an Open invoice that has received no payments. `business` can
-    /// only reach its own invoices: the lookup is by `(business, id)`.
+    /// only reach its own invoices: the lookup is by `(business, id)`. The
+    /// payee has no control over the invoice.
     pub fn void(env: Env, business: Address, id: BytesN<32>) -> Result<(), Error> {
         business.require_auth();
         storage::bump_instance(&env);
@@ -142,48 +152,14 @@ impl InvoiceRegistry {
         Ok(())
     }
 
-    /// Close a partially paid Open invoice (discount, write-off, or remainder
-    /// settled off-chain). Only the invoice's own business may close it.
-    /// Zero-paid invoices must use `void`.
-    pub fn close(env: Env, business: Address, id: BytesN<32>) -> Result<(), Error> {
-        business.require_auth();
-        storage::bump_instance(&env);
-        let mut invoice = storage::get_invoice(&env, &id).ok_or(Error::InvoiceNotFound)?;
-        if invoice.business != business {
-            return Err(Error::NotBusiness);
-        }
-        if invoice.status != InvoiceStatus::Open {
-            return Err(Error::NotOpen);
-        }
-        if invoice.paid == 0 {
-            return Err(Error::NothingPaid);
-        }
-        let outstanding = invoice
-            .amount
-            .checked_sub(invoice.paid)
-            .ok_or(Error::ArithmeticOverflow)?;
-        invoice.status = InvoiceStatus::Closed;
-        storage::set_invoice(&env, &invoice);
-
-        Closed {
-            id,
-            paid: invoice.paid,
-            outstanding,
-        }
-        .publish(&env);
-        Ok(())
-    }
-
     /// Close a partially paid Open invoice (discount, dispute, write-off or
     /// remainder settled off-chain). Only the invoice's business may close it.
     /// Invoices with nothing paid must use `void` instead.
     pub fn close(env: Env, business: Address, id: BytesN<32>) -> Result<(), Error> {
         business.require_auth();
         storage::bump_instance(&env);
-        let mut invoice = storage::get_invoice(&env, &id).ok_or(Error::InvoiceNotFound)?;
-        if invoice.business != business {
-            return Err(Error::NotBusiness);
-        }
+        let mut invoice =
+            storage::get_invoice(&env, &business, &id).ok_or(Error::InvoiceNotFound)?;
         if invoice.status != InvoiceStatus::Open {
             return Err(Error::NotOpen);
         }
@@ -199,6 +175,7 @@ impl InvoiceRegistry {
 
         Closed {
             id,
+            business,
             paid: invoice.paid,
             outstanding,
         }
@@ -206,7 +183,6 @@ impl InvoiceRegistry {
         Ok(())
     }
 
-    pub fn get(env: Env, id: BytesN<32>) -> Result<Invoice, Error> {
     pub fn get(env: Env, business: Address, id: BytesN<32>) -> Result<Invoice, Error> {
         storage::bump_instance(&env);
         storage::get_invoice(&env, &business, &id).ok_or(Error::InvoiceNotFound)

@@ -83,11 +83,17 @@ impl Setup<'_> {
         id: &BytesN<32>,
         amount: i128,
     ) -> Result<(), Option<Error>> {
+        // Tokens go to the invoice's payee; fall back to `business` for
+        // invoices that don't exist (the call fails before any transfer).
+        let payee = match self.registry.try_get(business, id) {
+            Ok(Ok(inv)) => inv.payee,
+            _ => business.clone(),
+        };
         let args = (payer.clone(), business.clone(), id.clone(), amount).into_val(&self.env);
         let sub = [MockAuthInvoke {
             contract: &self.token.address,
             fn_name: "transfer",
-            args: (payer.clone(), business.clone(), amount).into_val(&self.env),
+            args: (payer.clone(), payee, amount).into_val(&self.env),
             sub_invokes: &[],
         }];
         auth(&self.env, signer, &self.registry_id, "pay", args, &sub);
@@ -141,6 +147,18 @@ impl Setup<'_> {
         token: &Address,
         amount: i128,
     ) -> Result<(), Option<Error>> {
+        self.try_register_to(signer, business, id, token, amount, business)
+    }
+
+    fn try_register_to(
+        &self,
+        signer: &Address,
+        business: &Address,
+        id: &BytesN<32>,
+        token: &Address,
+        amount: i128,
+        payee: &Address,
+    ) -> Result<(), Option<Error>> {
         let content = self.hash(0xC0);
         let args = (
             business.clone(),
@@ -148,12 +166,13 @@ impl Setup<'_> {
             token.clone(),
             amount,
             content.clone(),
+            payee.clone(),
         )
             .into_val(&self.env);
         auth(&self.env, signer, &self.registry_id, "register", args, &[]);
         match self
             .registry
-            .try_register(business, id, token, &amount, &content)
+            .try_register(business, id, token, &amount, &content, payee)
         {
             Ok(Ok(())) => Ok(()),
             Err(Ok(e)) => Err(Some(e)),
@@ -217,6 +236,7 @@ fn register_creates_open_invoice() {
     assert_eq!(inv.paid, 0);
     assert_eq!(inv.status, InvoiceStatus::Open);
     assert_eq!(inv.content_hash, s.hash(0xC0));
+    assert_eq!(inv.payee, s.business);
 }
 
 #[test]
@@ -228,6 +248,7 @@ fn register_emits_registered_event() {
         business: s.business.clone(),
         token: s.token.address.clone(),
         amount: 500,
+        payee: s.business.clone(),
     };
     assert_eq!(
         s.env
@@ -500,8 +521,7 @@ fn pay_fails_atomically_with_insufficient_funds() {
     let payer = s.payer(100);
     // The token's own InsufficientBalance (#10) is decoded with this
     // contract's Error enum, so don't assert on the exact variant.
-    assert!(s.try_pay(&payer, &payer, &id, 200).is_err());
-    assert_eq!(s.try_pay(&payer, &payer, &s.business, &id, 200), Err(None));
+    assert!(s.try_pay(&payer, &payer, &s.business, &id, 200).is_err());
     // State update is rolled back with the failed transfer.
     let inv = s.registry.get(&s.business, &id);
     assert_eq!((inv.paid, inv.status), (0, InvoiceStatus::Open));
@@ -631,6 +651,7 @@ fn close_marks_closed_and_emits_event() {
     assert_eq!(s.try_close(&s.business, &s.business, &id), Ok(()));
     let expected = events::Closed {
         id: id.clone(),
+        business: s.business.clone(),
         paid: 200,
         outstanding: 300,
     };
@@ -642,7 +663,10 @@ fn close_marks_closed_and_emits_event() {
             .events(),
         [expected.to_xdr(&s.env, &s.registry_id)]
     );
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Closed);
+    assert_eq!(
+        s.registry.get(&s.business, &id).status,
+        InvoiceStatus::Closed
+    );
 }
 
 #[test]
@@ -653,7 +677,7 @@ fn close_blocks_payment() {
     s.pay(&payer, &id, 200);
     s.try_close(&s.business, &s.business, &id).unwrap();
     assert_eq!(
-        s.try_pay(&payer, &payer, &id, 100),
+        s.try_pay(&payer, &payer, &s.business, &id, 100),
         Err(Some(Error::NotOpen))
     );
     assert_eq!(s.token.balance(&payer), 800);
@@ -667,11 +691,11 @@ fn close_rejects_wrong_signer() {
     s.pay(&payer, &id, 200);
     let attacker = Address::generate(&s.env);
     assert_eq!(s.try_close(&attacker, &s.business, &id), Err(None));
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
-fn close_rejects_other_business() {
+fn close_cannot_reach_other_business_invoice() {
     let s = Setup::new();
     let id = s.register(1, 500);
     let payer = s.payer(1_000);
@@ -679,7 +703,7 @@ fn close_rejects_other_business() {
     let other = Address::generate(&s.env);
     assert_eq!(
         s.try_close(&other, &other, &id),
-        Err(Some(Error::NotBusiness))
+        Err(Some(Error::InvoiceNotFound))
     );
 }
 
@@ -696,12 +720,6 @@ fn close_rejects_unknown_invoice() {
 fn close_rejects_paid_void_and_closed() {
     let s = Setup::new();
     let payer = s.payer(1_000);
-    let paid = s.register(1, 500);
-    s.pay(&payer, &paid, 500);
-    let voided = s.register(2, 500);
-    s.try_void(&s.business, &s.business, &voided).unwrap();
-    let closed = s.register(3, 500);
-    s.pay(&payer, &closed, 1);
     let paid = s.register(1, 100);
     s.pay(&payer, &paid, 100);
     let voided = s.register(2, 100);
@@ -725,7 +743,7 @@ fn close_rejects_nothing_paid() {
         s.try_close(&s.business, &s.business, &id),
         Err(Some(Error::NothingPaid))
     );
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -1004,6 +1022,163 @@ fn paid_and_voided_events_carry_business() {
     );
 }
 
+// ---------------------------------------------------------------- payee (issue #4)
+
+#[test]
+fn register_rejects_registry_as_payee() {
+    let s = Setup::new();
+    let id = s.hash(1);
+    assert_eq!(
+        s.try_register_to(
+            &s.business,
+            &s.business,
+            &id,
+            &s.token.address,
+            100,
+            &s.registry_id
+        ),
+        Err(Some(Error::InvalidPayee))
+    );
+    assert_eq!(
+        s.registry.try_get(&s.business, &id),
+        Err(Ok(Error::InvoiceNotFound))
+    );
+}
+
+#[test]
+fn pay_routes_funds_to_payee_not_business() {
+    let s = Setup::new();
+    let id = s.hash(1);
+    let payee = Address::generate(&s.env);
+    s.try_register_to(&s.business, &s.business, &id, &s.token.address, 500, &payee)
+        .unwrap();
+    let payer = s.payer(500);
+    s.pay(&payer, &id, 200);
+    s.pay(&payer, &id, 300);
+
+    assert_eq!(s.token.balance(&payee), 500);
+    assert_eq!(s.token.balance(&s.business), 0);
+    assert_eq!(s.token.balance(&s.registry_id), 0);
+    let inv = s.registry.get(&s.business, &id);
+    assert_eq!((inv.payee, inv.status), (payee, InvoiceStatus::Paid));
+}
+
+#[test]
+fn register_with_payee_emits_payee_in_event() {
+    let s = Setup::new();
+    let id = s.hash(1);
+    let payee = Address::generate(&s.env);
+    s.try_register_to(&s.business, &s.business, &id, &s.token.address, 500, &payee)
+        .unwrap();
+    let expected = events::Registered {
+        id,
+        business: s.business.clone(),
+        token: s.token.address.clone(),
+        amount: 500,
+        payee,
+    };
+    assert_eq!(
+        s.env
+            .events()
+            .all()
+            .filter_by_contract(&s.registry_id)
+            .events(),
+        [expected.to_xdr(&s.env, &s.registry_id)]
+    );
+}
+
+#[test]
+fn payee_cannot_void_or_close() {
+    let s = Setup::new();
+    let id = s.hash(1);
+    let payee = Address::generate(&s.env);
+    s.try_register_to(&s.business, &s.business, &id, &s.token.address, 500, &payee)
+        .unwrap();
+    // Payee signing for the business's invoice: host auth failure.
+    assert_eq!(s.try_void(&payee, &s.business, &id), Err(None));
+    // Payee as the controller: it has no invoice under its own address.
+    assert_eq!(
+        s.try_void(&payee, &payee, &id),
+        Err(Some(Error::InvoiceNotFound))
+    );
+    let payer = s.payer(100);
+    s.pay(&payer, &id, 100);
+    assert_eq!(s.try_close(&payee, &s.business, &id), Err(None));
+    assert_eq!(
+        s.try_close(&payee, &payee, &id),
+        Err(Some(Error::InvoiceNotFound))
+    );
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
+    // The business still can.
+    assert_eq!(s.try_close(&s.business, &s.business, &id), Ok(()));
+}
+
+/// Revenue → vault → M-of-N payout across both contracts.
+#[test]
+fn invoice_paid_into_approval_vault_then_paid_out_by_m_of_n() {
+    use approval_vault::{ApprovalVault, ApprovalVaultClient};
+
+    let s = Setup::new();
+    let approvers = soroban_sdk::vec![
+        &s.env,
+        Address::generate(&s.env),
+        Address::generate(&s.env),
+        Address::generate(&s.env)
+    ];
+    let vault_id = s.env.register(ApprovalVault, (approvers.clone(), 2u32));
+    let vault = ApprovalVaultClient::new(&s.env, &vault_id);
+
+    // Business registers an invoice payable into the vault; client pays it.
+    let id = s.hash(1);
+    s.try_register_to(
+        &s.business,
+        &s.business,
+        &id,
+        &s.token.address,
+        1_000,
+        &vault_id,
+    )
+    .unwrap();
+    let payer = s.payer(1_000);
+    s.pay(&payer, &id, 1_000);
+    assert_eq!(vault.balance(&s.token.address), 1_000);
+    assert_eq!(s.token.balance(&s.business), 0);
+    assert_eq!(s.token.balance(&s.registry_id), 0);
+
+    // 2-of-3 approve a payout from the vault.
+    let a0 = approvers.get(0).unwrap();
+    let a1 = approvers.get(1).unwrap();
+    let supplier = Address::generate(&s.env);
+    let memo = s.hash(9);
+    let expires = s.env.ledger().timestamp() + 1_000;
+    let args = (
+        a0.clone(),
+        s.token.address.clone(),
+        supplier.clone(),
+        600i128,
+        memo.clone(),
+        expires,
+    )
+        .into_val(&s.env);
+    auth(&s.env, &a0, &vault_id, "propose", args, &[]);
+    let pid = vault.propose(&a0, &s.token.address, &supplier, &600, &memo, &expires);
+    auth(
+        &s.env,
+        &a1,
+        &vault_id,
+        "approve",
+        (a1.clone(), pid).into_val(&s.env),
+        &[],
+    );
+    vault.approve(&a1, &pid);
+    s.env.mock_auths(&[]);
+    vault.execute(&pid);
+
+    assert_eq!(s.token.balance(&supplier), 600);
+    assert_eq!(vault.balance(&s.token.address), 400);
+    assert_eq!(s.token.balance(&s.business), 0);
+}
+
 // ---------------------------------------------------------------- recorded auth trees
 
 fn contract_call(
@@ -1062,6 +1237,7 @@ fn register_requires_exactly_the_business_auth() {
         s.token.address.clone(),
         100i128,
         s.hash(0xC0),
+        s.business.clone(),
     )
         .into_val(&s.env);
     assert_eq!(
@@ -1088,7 +1264,8 @@ fn event_topic_xdr_matches_docs() {
                 id: id.clone(),
                 business: a.clone(),
                 token: a.clone(),
-                amount: 1
+                amount: 1,
+                payee: a.clone()
             }
             .to_xdr(&env, &contract),
             "AAAADwAAAApyZWdpc3RlcmVkAAA=",
@@ -1115,9 +1292,9 @@ fn event_topic_xdr_matches_docs() {
         (
             events::Closed {
                 id: id.clone(),
+                business: a.clone(),
                 paid: 1,
                 outstanding: 1
-                outstanding: 0
             }
             .to_xdr(&env, &contract),
             "AAAADwAAAAZjbG9zZWQAAA=="

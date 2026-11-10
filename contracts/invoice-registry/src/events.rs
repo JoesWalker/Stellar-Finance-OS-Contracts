@@ -18,8 +18,11 @@ pub struct Registered {
     pub business: Address,
     pub token: Address,
     pub amount: i128,
+    pub payee: Address,
 }
 
+/// Funds went to the invoice's `payee` (see `Registered`), not necessarily
+/// to `business`.
 #[contractevent]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Paid {
@@ -44,15 +47,7 @@ pub struct Voided {
 pub struct Closed {
     #[topic]
     pub id: BytesN<32>,
-    pub paid: i128,
-    pub outstanding: i128,
-}
-
-#[contractevent]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Closed {
-    #[topic]
-    pub id: BytesN<32>,
+    pub business: Address,
     pub paid: i128,
     pub outstanding: i128,
 }

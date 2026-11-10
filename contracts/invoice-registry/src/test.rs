@@ -500,8 +500,7 @@ fn pay_fails_atomically_with_insufficient_funds() {
     let payer = s.payer(100);
     // The token's own InsufficientBalance (#10) is decoded with this
     // contract's Error enum, so don't assert on the exact variant.
-    assert!(s.try_pay(&payer, &payer, &id, 200).is_err());
-    assert_eq!(s.try_pay(&payer, &payer, &s.business, &id, 200), Err(None));
+    assert!(s.try_pay(&payer, &payer, &s.business, &id, 200).is_err());
     // State update is rolled back with the failed transfer.
     let inv = s.registry.get(&s.business, &id);
     assert_eq!((inv.paid, inv.status), (0, InvoiceStatus::Open));
@@ -631,6 +630,7 @@ fn close_marks_closed_and_emits_event() {
     assert_eq!(s.try_close(&s.business, &s.business, &id), Ok(()));
     let expected = events::Closed {
         id: id.clone(),
+        business: s.business.clone(),
         paid: 200,
         outstanding: 300,
     };
@@ -642,7 +642,10 @@ fn close_marks_closed_and_emits_event() {
             .events(),
         [expected.to_xdr(&s.env, &s.registry_id)]
     );
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Closed);
+    assert_eq!(
+        s.registry.get(&s.business, &id).status,
+        InvoiceStatus::Closed
+    );
 }
 
 #[test]
@@ -653,7 +656,7 @@ fn close_blocks_payment() {
     s.pay(&payer, &id, 200);
     s.try_close(&s.business, &s.business, &id).unwrap();
     assert_eq!(
-        s.try_pay(&payer, &payer, &id, 100),
+        s.try_pay(&payer, &payer, &s.business, &id, 100),
         Err(Some(Error::NotOpen))
     );
     assert_eq!(s.token.balance(&payer), 800);
@@ -667,7 +670,7 @@ fn close_rejects_wrong_signer() {
     s.pay(&payer, &id, 200);
     let attacker = Address::generate(&s.env);
     assert_eq!(s.try_close(&attacker, &s.business, &id), Err(None));
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -676,11 +679,13 @@ fn close_rejects_other_business() {
     let id = s.register(1, 500);
     let payer = s.payer(1_000);
     s.pay(&payer, &id, 200);
+    // Another business can only reach its own `(business, id)` key.
     let other = Address::generate(&s.env);
     assert_eq!(
         s.try_close(&other, &other, &id),
-        Err(Some(Error::NotBusiness))
+        Err(Some(Error::InvoiceNotFound))
     );
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -696,12 +701,6 @@ fn close_rejects_unknown_invoice() {
 fn close_rejects_paid_void_and_closed() {
     let s = Setup::new();
     let payer = s.payer(1_000);
-    let paid = s.register(1, 500);
-    s.pay(&payer, &paid, 500);
-    let voided = s.register(2, 500);
-    s.try_void(&s.business, &s.business, &voided).unwrap();
-    let closed = s.register(3, 500);
-    s.pay(&payer, &closed, 1);
     let paid = s.register(1, 100);
     s.pay(&payer, &paid, 100);
     let voided = s.register(2, 100);
@@ -725,7 +724,7 @@ fn close_rejects_nothing_paid() {
         s.try_close(&s.business, &s.business, &id),
         Err(Some(Error::NothingPaid))
     );
-    assert_eq!(s.registry.get(&id).status, InvoiceStatus::Open);
+    assert_eq!(s.registry.get(&s.business, &id).status, InvoiceStatus::Open);
 }
 
 #[test]
@@ -1115,8 +1114,8 @@ fn event_topic_xdr_matches_docs() {
         (
             events::Closed {
                 id: id.clone(),
+                business: a.clone(),
                 paid: 1,
-                outstanding: 1
                 outstanding: 0
             }
             .to_xdr(&env, &contract),

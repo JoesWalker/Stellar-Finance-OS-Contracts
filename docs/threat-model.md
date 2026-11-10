@@ -57,14 +57,15 @@ Status: **pre-audit, testnet only.** Not upgradeable (no `update_current_contrac
 | R9 | i128 overflow on `paid` | `checked_add` → `ArithmeticOverflow` | `pay_rejects_overflowing_total` |
 | R10 | PII on-chain | Only hashes and amounts are stored (`id`, `content_hash`) | Design / backend responsibility |
 | R12 | Partially paid invoice stays payable forever | `close` makes it terminal; `pay` then fails `NotOpen` | `close_blocks_payment`, `no_payment_accepted_after_close` |
-| R11 | Reusing a voided id makes events ambiguous | Ids are never freed; `InvoiceExists` even after `void` | `void_does_not_free_the_id_for_reuse` |
+| R12 | Payee (e.g. a vault) controls or redirects an invoice it is paid into | Only `business` can `void`/`close`; lookups are keyed by `(business, id)` so the payee reaches nothing. `payee` is fixed at `register` | `payee_cannot_void_or_close`, `pay_routes_funds_to_payee_not_business` |
+| R13 | Registry accumulates funds (`payee` = registry) | `register` rejects `payee == current_contract_address()` with `InvalidPayee`; `pay` always transfers payer → payee | `register_rejects_registry_as_payee`, property test `paid_never_exceeds_amount_and_registry_holds_nothing` |
 | R11 | Reusing a voided id makes events ambiguous | Ids are never freed per business; `InvoiceExists` even after `void` | `void_does_not_free_the_id_for_reuse` |
 
 ## Residual risks and open items
 
 1. **Token trust (R8, V10).** The contracts accept any token address. Downstream systems must allow-list token contract IDs, e.g. testnet/mainnet USDC SAC.
 2. **Invoice-id squatting (downgraded).** Fixed for payment safety by the `(business, id)` key (R2). Residual: anyone can register invoices under their own address, which is only clutter. The indexer and clients must always carry the intended `business`; a client who pays a *different* business address than the one on their invoice pays that address. Backend salting remains good hygiene.
-3. **Vault as payee.** Invoices pay the `business` address directly. Routing payments to an approval vault would need a separate `payee` field.
+3. **Wrong payee (resolved: vault as payee).** Invoices carry a `payee`, so revenue can flow straight into an approval vault (`invoice_paid_into_approval_vault_then_paid_out_by_m_of_n`). Residual: the contract cannot check that `payee` is the business's *intended* vault; a compromised business key can register invoices paying anywhere. The backend should verify `payee` against `deployments/<network>.json` (or the business's known accounts) from the `registered` event before showing an invoice to a client.
 4. **Approver key loss.** If enough approvers lose keys that `threshold` can't be reached, funds are stuck. This is operational: keep `threshold < approvers.len()` to leave headroom.
 5. **No upgrade path.** This is intentional for v1 (README §5). Bugs require redeploying and migrating funds through a normal proposal.
 6. **TTL archival.** Entries untouched for about 30 days can be archived. They are restorable with `stellar contract restore`; the backend should restore before acting on long-idle proposals or invoices.
